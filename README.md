@@ -69,7 +69,7 @@ The bug becomes a visible blank page rather than a silent breach.
 ## Try it
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/postgres-rls-multi-tenancy
+git clone https://github.com/wenceslauAndre/postgres-rls-multi-tenancy
 cd postgres-rls-multi-tenancy
 npm install
 cp .env.example .env
