@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rls_demo
+    # 5433, not 5432, so this does not collide with a Postgres you already
+    # have running locally. The URLs in .env.example use the same port.
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rls_demo"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

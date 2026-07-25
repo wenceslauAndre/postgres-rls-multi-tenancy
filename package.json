@@ -1,0 +1,33 @@
+{
+  "name": "postgres-rls-multi-tenancy",
+  "version": "1.0.0",
+  "description": "A minimal, runnable demonstration of multi-tenant isolation enforced by Postgres Row Level Security instead of application WHERE clauses.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "setup": "tsx src/setup.ts",
+    "test": "tsx src/test.ts",
+    "leak": "tsx src/leak.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "postgres",
+    "row-level-security",
+    "rls",
+    "multi-tenant",
+    "multi-tenancy",
+    "saas",
+    "tenant-isolation"
+  ],
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
