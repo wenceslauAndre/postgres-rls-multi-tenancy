@@ -78,7 +78,8 @@ docker compose up -d      # or point .env at any Postgres you already have
 
 npm run setup             # applies sql/, seeds two tenants
 npm run leak              # the output at the top of this README
-npm test                  # seven assertions
+npm run check             # the startup guard, against both connections
+npm test                  # nine assertions
 ```
 
 `npm test` asserts, against a live server:
@@ -91,6 +92,8 @@ npm test                  # seven assertions
   ✓ WITH CHECK blocks writing a row into another org
   ✓ own_memberships_read lets a user list their orgs pre-context
   ✓ connection reused after a tenant tx → no ''::uuid crash
+  ✓ same connection, A then B → B sees only B
+  ✓ commit, rollback and abort all leave no tenant context
 ```
 
 ---
@@ -152,8 +155,20 @@ on a fresh pool, which is what makes it miserable to track down.
 `NULL` casts cleanly and matches no rows, so the failure mode is "you see
 nothing" rather than a crash — or, worse, a fallback that shows everything.
 
-The seventh assertion in `npm test` covers exactly this: it reuses a
-connection after a tenant transaction and requires zero rows and no error.
+`npm test` covers this from both ends: it reuses a connection after a tenant
+transaction and requires zero rows and no error, and it checks that all three
+ways a transaction can end leave the connection contextless. Measured, since
+the difference is not obvious:
+
+| after | `current_setting('app.current_org_id', true)` |
+| --- | --- |
+| a connection that never set it | `NULL` |
+| `COMMIT` | `''` |
+| `ROLLBACK` | `''` |
+| an aborted transaction | `''` |
+
+So there is no fourth case hiding behind an error path — every ending
+converges on the empty string, and one `NULLIF` covers all of them.
 
 ### 3. `SECURITY DEFINER` hands the exemption straight back
 
@@ -181,6 +196,43 @@ AS $$ ... $$;
 Worth grepping your schema for `SECURITY DEFINER` and checking that each one
 either does not need containment, or filters by organization itself. Prefer
 `SECURITY INVOKER` (the default) unless you have a specific reason.
+
+---
+
+## Make the role split an invariant, not a README
+
+Everything above is a thing you can get right once and lose later. A test
+proves the role is contained on the machine that ran the test. It says
+nothing about the deployment where someone edited `DATABASE_URL` at 5pm on a
+Friday, or the staging box that was pointed at the migration user "just to
+unblock something".
+
+So assert it at startup and refuse to boot:
+
+```ts
+import { assertRuntimeRoleIsContained, formatRoleEvidence } from "./assert-role";
+
+const evidence = await assertRuntimeRoleIsContained(pool); // throws if exempt
+console.log(formatRoleEvidence(evidence));
+```
+
+`npm run check` runs it against both connections, so you can see both
+outcomes:
+
+```
+  PASS APP_DATABASE_URL
+       [rls] contained: user=app_user superuser=false bypassrls=false owned_tables=0 row_security=on
+
+  REFUSED OWNER_DATABASE_URL — as it should be
+       Refusing to start: the database role "postgres" is exempt from row level
+       security because it is a superuser, and it holds BYPASSRLS, and it owns 4
+       table(s) in public. Every tenant isolation policy in this schema would be
+       inert.
+```
+
+The log line matters as much as the throw. When something goes wrong at 3am,
+"were we actually running with the contained role?" should be a `grep`, not
+an archaeology project.
 
 ---
 
@@ -232,9 +284,11 @@ sql/01-schema.sql      four tables
 sql/02-app-role.sql    the low-privilege role — the part guides skip
 sql/03-policies.sql    the policies, commented
 src/db.ts              two pools, withTenantContext, withUserContext
+src/assert-role.ts     the startup guard — call this before serving traffic
 src/setup.ts           applies sql/, seeds two tenants
 src/leak.ts            same query, two roles, different answers
-src/test.ts            seven assertions against a live server
+src/check.ts           runs the guard against both connections
+src/test.ts            nine assertions against a live server
 ```
 
 ## Acknowledgements

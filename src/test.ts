@@ -1,8 +1,8 @@
 /**
- * Seven assertions against a live Postgres. Run with `npm test`.
+ * Nine assertions against a live Postgres. Run with `npm test`.
  *
  * Every one of these is a property of the database, not of application code.
- * A mocked query layer would pass all seven while the real thing leaked.
+ * A mocked query layer would pass all nine while the real thing leaked.
  */
 import { appPool, ownerPool, withTenantContext, withUserContext } from "./db";
 
@@ -117,6 +117,54 @@ async function main() {
       "connection reused after a tenant tx → no ''::uuid crash",
       threw === "" && recycled === 0,
       threw ? `(threw ${threw} on the stale GUC)` : `(${recycled} rows)`,
+    );
+
+    // 8 — switching tenants on one live connection. Assertion 3 proves a
+    //     context sees its own rows; this proves the previous tenant's
+    //     context does not survive into the next transaction on the same
+    //     physical connection, which is the case a pool actually produces.
+    const asAcme = await withTenantContext(client, ACME, USER, () =>
+      client.query<{ organization_id: string }>("SELECT organization_id FROM documents"),
+    );
+    const asGlobex = await withTenantContext(client, GLOBEX, USER, () =>
+      client.query<{ organization_id: string }>("SELECT organization_id FROM documents"),
+    );
+    check(
+      "same connection, A then B → B sees only B",
+      asAcme.rowCount === 2 &&
+        asGlobex.rowCount === 1 &&
+        asGlobex.rows.every((r) => r.organization_id === GLOBEX),
+      `(A: ${asAcme.rowCount} rows, then B: ${asGlobex.rowCount} row, 0 carried over)`,
+    );
+
+    // 9 — a transaction can end three ways, and all three have to leave the
+    //     connection contextless. Verified empirically: commit, rollback and
+    //     an aborted transaction all revert the GUC to '' (never to NULL,
+    //     never to the previous tenant's value).
+    const endings: Array<[string, number]> = [];
+
+    await withTenantContext(client, ACME, USER, async () => {});
+    endings.push(["commit", (await client.query("SELECT id FROM documents")).rowCount ?? -1]);
+
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('app.current_org_id', $1, true)", [ACME]);
+    await client.query("ROLLBACK");
+    endings.push(["rollback", (await client.query("SELECT id FROM documents")).rowCount ?? -1]);
+
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('app.current_org_id', $1, true)", [ACME]);
+    try {
+      await client.query("SELECT 1 / 0");
+    } catch {
+      /* the point is to abort the transaction */
+    }
+    await client.query("ROLLBACK");
+    endings.push(["aborted", (await client.query("SELECT id FROM documents")).rowCount ?? -1]);
+
+    check(
+      "commit, rollback and abort all leave no tenant context",
+      endings.every(([, rows]) => rows === 0),
+      `(${endings.map(([name, rows]) => `${name}: ${rows}`).join(", ")})`,
     );
 
     console.log();
