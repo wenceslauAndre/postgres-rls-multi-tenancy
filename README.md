@@ -237,6 +237,13 @@ src/leak.ts            same query, two roles, different answers
 src/test.ts            seven assertions against a live server
 ```
 
+## Acknowledgements
+
+The `SECURITY DEFINER` trap and the constraint oracle were both raised by
+**Rahul S** in a discussion on dev.to. Neither was in the first version of
+this repo, and both survive a correct two-role split — which is exactly the
+kind of gap you do not find on your own.
+
 ## License
 
 MIT. Take it, copy the pattern into your own project, no attribution needed.
