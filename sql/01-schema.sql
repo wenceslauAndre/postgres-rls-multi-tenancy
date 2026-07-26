@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS memberships (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   user_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- Note the organization_id in the constraint, not just user_id. Unique and
+  -- foreign key checks run below the policy layer -- the docs are explicit
+  -- that they "always bypass row security" -- so a globally scoped UNIQUE
+  -- reports a violation for a row the caller is not allowed to read, which
+  -- confirms that some other tenant holds that value. Scope the constraint
+  -- to the tenant wherever the value only has to be unique per tenant.
   UNIQUE (organization_id, user_id)
 );
 

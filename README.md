@@ -95,10 +95,10 @@ npm test                  # seven assertions
 
 ---
 
-## The two details that decide whether any of this works
+## The details that decide whether any of this works
 
-Everything above is in most RLS tutorials. These two usually are not, and
-without them the policies are decorative.
+Everything above is in most RLS tutorials. These usually are not, and without
+them the policies are decorative.
 
 ### 1. Ownership is an exemption
 
@@ -155,6 +155,33 @@ nothing" rather than a crash — or, worse, a fallback that shows everything.
 The seventh assertion in `npm test` covers exactly this: it reuses a
 connection after a tenant transaction and requires zero rows and no error.
 
+### 3. `SECURITY DEFINER` hands the exemption straight back
+
+This is the first trap again, through a door that does not look like a
+connection at all.
+
+A `SECURITY DEFINER` function executes with the privileges of the function's
+*owner*, not the caller's. So if that owner is a superuser or holds
+`BYPASSRLS`, row security is simply off inside the function body — and per
+the table above, `FORCE` does not contain either of those two roles.
+
+You can get the two-role split exactly right and then give the exemption back
+through an audit trigger, a helper function, or an RPC endpoint that nobody
+thinks of as a database connection:
+
+```sql
+-- rls is not in effect inside here if the owner is a superuser
+CREATE FUNCTION log_access(doc_id uuid) RETURNS void
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public   -- do this too; separate escalation path otherwise
+AS $$ ... $$;
+```
+
+Worth grepping your schema for `SECURITY DEFINER` and checking that each one
+either does not need containment, or filters by organization itself. Prefer
+`SECURITY INVOKER` (the default) unless you have a specific reason.
+
 ---
 
 ## What RLS does not do
@@ -175,6 +202,28 @@ Worth being clear, because it is easy to oversell:
   by its token, happens before you know the tenant. Those go through the
   owner connection deliberately — a small, named, auditable list, not a
   habit.
+- **Constraints leak across tenants, by design.** From the Postgres docs:
+  *"Referential integrity checks, such as unique or primary key constraints
+  and foreign key references, always bypass row security to ensure that data
+  integrity is maintained."*
+
+  So a global `UNIQUE` on an email, a slug, or a Stripe customer id is an
+  oracle: tenant A inserts a colliding value, gets a unique violation back
+  instead of a success, and has just learned that tenant B holds it. The
+  `SELECT` path is filtered perfectly and the row still leaks through the
+  error. Foreign keys do the same in the other direction — the reference
+  resolves against rows the caller cannot read.
+
+  Where a value only has to be unique *per tenant*, put the tenant in the
+  constraint and the channel closes:
+
+  ```sql
+  UNIQUE (organization_id, email)   -- not UNIQUE (email)
+  ```
+
+  Where it genuinely has to be globally unique, schema design cannot remove
+  the oracle. Not returning the constraint error verbatim narrows it; nothing
+  closes it.
 
 ## Layout
 
