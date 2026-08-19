@@ -10,6 +10,7 @@
     "setup": "tsx src/setup.ts",
     "test": "tsx src/test.ts",
     "leak": "tsx src/leak.ts",
+    "side-channels": "tsx src/side-channels.ts",
     "check": "tsx src/check.ts",
     "typecheck": "tsc --noEmit"
   },

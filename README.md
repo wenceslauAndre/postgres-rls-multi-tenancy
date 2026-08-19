@@ -78,6 +78,7 @@ docker compose up -d      # or point .env at any Postgres you already have
 
 npm run setup             # applies sql/, seeds two tenants
 npm run leak              # the output at the top of this README
+npm run side-channels     # two leaks that survive correct policies
 npm run check             # the startup guard, against both connections
 npm test                  # nine assertions
 ```
@@ -309,6 +310,7 @@ src/db.ts              two pools, withTenantContext, withUserContext
 src/assert-role.ts     the startup guard — call this before serving traffic
 src/setup.ts           applies sql/, seeds two tenants
 src/leak.ts            same query, two roles, different answers
+src/side-channels.ts   the two leaks that survive correct policies
 src/check.ts           runs the guard against both connections
 src/test.ts            nine assertions against a live server
 ```
