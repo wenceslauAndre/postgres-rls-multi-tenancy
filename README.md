@@ -138,6 +138,13 @@ someone points the app at the wrong connection string.
 ends, the custom setting does not become unset or `NULL` — it becomes the
 **empty string**.
 
+The mechanism is `RESET`. A transaction-local value expires when the
+transaction ends and the setting falls back to its *reset value* — and a
+custom GUC that was never globally `SET` has a reset value of the empty
+string, because `set_config` is what brought the placeholder into existence
+and there is no better default to give it. This is why `missing_ok = true`
+does not save you: the setting is not missing. It exists, and it is empty.
+
 On a pooled connection, that matters. The next request to reuse that
 connection without setting an org context evaluates:
 
@@ -168,7 +175,22 @@ the difference is not obvious:
 | an aborted transaction | `''` |
 
 So there is no fourth case hiding behind an error path — every ending
-converges on the empty string, and one `NULLIF` covers all of them.
+converges on the empty string, and one `NULLIF` covers all of them. They
+converge because they are the same `RESET`, not three separate code paths.
+
+**This behaviour is not documented.** The customized-options page says only
+that placeholders *"have no function until the module that defines them is
+loaded"* — nothing about their type or reset value — and the `set_config` /
+`current_setting` reference does not say what happens when a transaction-local
+value expires. That gap is known upstream: there is an open pgsql-hackers
+proposal from David G. Johnston to document exactly this, whose diff adds that
+placeholders have *"string data type with reset value of empty string"* and
+that `set_config()` creates placeholders implicitly.
+
+[The proposal](https://www.postgresql.org/message-id/CAKFQuwY0SK6JdCci1VJX6xsztRXgGeVEY-grkENZx+3CZpyPcQ@mail.gmail.com)
+
+Until it lands, the behaviour is real and unwritten — which is why the table
+above is measured rather than cited.
 
 ### 3. `SECURITY DEFINER` hands the exemption straight back
 
@@ -297,6 +319,13 @@ The `SECURITY DEFINER` trap and the constraint oracle were both raised by
 **Rahul S** in a discussion on dev.to. Neither was in the first version of
 this repo, and both survive a correct two-role split — which is exactly the
 kind of gap you do not find on your own.
+
+The reset-value explanation above came from a reader on dev.to who hit the
+same bug on a PostgREST stack, with `request.jwt.claim.sub` instead of
+`app.current_org_id`. This repo had the measurement and called it "becomes
+the empty string"; they supplied the mechanism that produces it. Two
+independent reproductions, on different stacks, before anyone had written
+it down.
 
 ## License
 
