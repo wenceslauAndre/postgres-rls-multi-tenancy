@@ -315,6 +315,21 @@ src/check.ts           runs the guard against both connections
 src/test.ts            nine assertions against a live server
 ```
 
+## Written up
+
+The long-form version of everything here, in two parts:
+
+1. [**Two traps that silently disable your policies**](https://dev.to/wenceslaudev/postgres-rls-multi-tenancy-two-traps-that-silently-disable-your-policies-5gn8)
+   — the role exemption, and the transaction-local GUC that reverts to an
+   empty string on a pooled connection. Both stop the policy layer from
+   working at all. `npm run leak` is the demo.
+
+2. [**Two leaks that survive correct policies**](https://dev.to/wenceslaudev/postgres-rls-multi-tenancy-two-leaks-that-survive-correct-policies-kb2)
+   — `SECURITY DEFINER` handing the exemption back, and constraint checks
+   reporting collisions with rows the caller cannot read. Both happen while
+   every policy is working exactly as written. `npm run side-channels` is
+   the demo.
+
 ## Acknowledgements
 
 The `SECURITY DEFINER` trap and the constraint oracle were both raised by
