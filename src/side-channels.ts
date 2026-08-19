@@ -1,5 +1,5 @@
 /**
- * Two ways a tenant learns about another tenant's data while every policy is
+ * Three ways a tenant learns about another tenant's data while every policy is
  * working exactly as written.
  *
  * Run with `npm run side-channels`.
@@ -22,6 +22,14 @@
  *                          uniqueness against rows it is not allowed to see, so
  *                          it sees all of them — and reports collisions with
  *                          rows the caller cannot read.
+ *
+ *   3. foreign keys      — the same exemption, in the other direction: a
+ *                          reference to a row you cannot read resolves, so a
+ *                          SUCCESSFUL insert tells you the row exists. Putting
+ *                          the tenant in the reference itself closes it:
+ *                          FOREIGN KEY (organization_id, project_id)
+ *                            REFERENCES projects (organization_id, id).
+ *                          Raised by Mads Hansen on dev.to.
  *
  * Everything this script creates, it drops again. The schema in sql/ models
  * the correct pattern on purpose; the anti-patterns below are built here,
@@ -198,7 +206,102 @@ async function main() {
     );
     console.log(dim("  See the README: narrow the channel, and know that it is still there."));
     console.log();
+
+    // -----------------------------------------------------------------
+    // 3. The foreign key probe, and the composite fix
+    // -----------------------------------------------------------------
+    await owner.query(`DROP TABLE IF EXISTS tasks`);
+    await owner.query(`
+      CREATE TABLE tasks (
+        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        project_id      uuid NOT NULL REFERENCES projects(id),  -- naive: tenant not in the reference
+        title           text NOT NULL
+      );
+    `);
+    await owner.query(`ALTER TABLE tasks ENABLE ROW LEVEL SECURITY`);
+    await owner.query(`ALTER TABLE tasks FORCE ROW LEVEL SECURITY`);
+    await owner.query(`
+      CREATE POLICY tenant_isolation ON tasks
+        USING      (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid)
+        WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid);
+    `);
+    await owner.query(`GRANT SELECT, INSERT ON tasks TO app_user`);
+
+    const globexProject = (
+      await owner.query<{ id: string }>(
+        `SELECT id FROM projects WHERE organization_id = $1 LIMIT 1`,
+        [GLOBEX],
+      )
+    ).rows[0];
+
+    // Acme references a project it cannot read. WITH CHECK only validates the
+    // task's OWN organization_id, and the FK check bypasses row security.
+    let naive: string;
+    try {
+      await withTenantContext(app, ACME, USER, () =>
+        app.query(
+          `INSERT INTO tasks (organization_id, project_id, title) VALUES ($1, $2, 'probe')`,
+          [ACME, globexProject?.id],
+        ),
+      );
+      naive = red("accepted — a cross-tenant row now exists");
+    } catch (err) {
+      naive = green(`rejected: ${(err as PgError).code}`);
+    }
+
+    console.log(bold("  3. The foreign key probe"));
+    console.log(
+      dim(`  as app_user · org context = Acme · Globex owns project ${globexProject?.id?.slice(0, 8)}…`),
+    );
+    console.log();
+    console.log(dim("  with a plain FK — REFERENCES projects(id):"));
+    console.log(`      INSERT task -> Globex's project      ${naive}`);
+    console.log();
+
+    // The fix. Clean the offending row first: you cannot add the constraint
+    // while data violates it, which is also what retrofitting costs you.
+    await owner.query(`DELETE FROM tasks`);
+    await owner.query(`ALTER TABLE projects ADD CONSTRAINT projects_org_id_key UNIQUE (organization_id, id)`);
+    await owner.query(`ALTER TABLE tasks DROP CONSTRAINT tasks_project_id_fkey`);
+    await owner.query(`
+      ALTER TABLE tasks ADD CONSTRAINT tasks_org_project_fkey
+        FOREIGN KEY (organization_id, project_id) REFERENCES projects (organization_id, id);
+    `);
+
+    async function probe(projectId: string): Promise<string> {
+      try {
+        await withTenantContext(app, ACME, USER, () =>
+          app.query(
+            `INSERT INTO tasks (organization_id, project_id, title) VALUES ($1, $2, 'probe')`,
+            [ACME, projectId],
+          ),
+        );
+        return red("accepted");
+      } catch (err) {
+        return `${(err as PgError).code} ${(err as PgError).constraint ?? ""}`.trim();
+      }
+    }
+
+    const realForeign = await probe(globexProject!.id);
+    const madeUp = await probe("99999999-9999-9999-9999-999999999999");
+
+    console.log(dim("  with a composite FK — REFERENCES projects(organization_id, id):"));
+    console.log(`      INSERT task -> Globex's real project  ${green(realForeign)}`);
+    console.log(`      INSERT task -> a uuid that exists nowhere  ${green(madeUp)}`);
+    console.log();
+    console.log(
+      dim(
+        `  ${realForeign === madeUp ? "Identical errors" : "DIFFERENT errors — the probe still leaks"}. A row that exists and a row that`,
+      ),
+    );
+    console.log(dim("  never existed are indistinguishable, so the probe learns nothing."));
+    console.log(dim("  The pair (Acme, that id) does not exist either way."));
+    console.log();
   } finally {
+    // tasks first: it has a foreign key into projects, so the reverse order
+    // fails on the dependency and leaves projects behind.
+    await owner.query(`DROP TABLE IF EXISTS tasks`).catch(() => {});
     await owner.query(`DROP TABLE IF EXISTS projects`).catch(() => {});
     await owner.query(`DROP FUNCTION IF EXISTS document_count()`).catch(() => {});
     if (pinnedLocale) await owner.query(`ALTER ROLE app_user RESET lc_messages`).catch(() => {});

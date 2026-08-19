@@ -78,7 +78,7 @@ docker compose up -d      # or point .env at any Postgres you already have
 
 npm run setup             # applies sql/, seeds two tenants
 npm run leak              # the output at the top of this README
-npm run side-channels     # two leaks that survive correct policies
+npm run side-channels     # three leaks that survive correct policies
 npm run check             # the startup guard, against both connections
 npm test                  # nine assertions
 ```
@@ -300,6 +300,26 @@ Worth being clear, because it is easy to oversell:
   the oracle. Not returning the constraint error verbatim narrows it; nothing
   closes it.
 
+  **Foreign keys close completely**, though, because the tenant can go into
+  the reference itself. Give the parent a unique constraint on the pair, and
+  point a composite foreign key at it:
+
+  ```sql
+  -- parent
+  UNIQUE (organization_id, id)          -- redundant next to the PK, load-bearing
+
+  -- child
+  FOREIGN KEY (organization_id, project_id)
+    REFERENCES projects (organization_id, id)
+  ```
+
+  The child carries its tenant, the reference is checked against the pair, and
+  `WITH CHECK` already pins the child's `organization_id` to the caller. A
+  cross-tenant reference stops being something you have to remember not to
+  write — and the probe dies with it, because referencing another tenant's
+  real row and referencing a uuid that exists nowhere now return the same
+  error. `npm run side-channels` proves that last part.
+
 ## Layout
 
 ```
@@ -310,7 +330,7 @@ src/db.ts              two pools, withTenantContext, withUserContext
 src/assert-role.ts     the startup guard — call this before serving traffic
 src/setup.ts           applies sql/, seeds two tenants
 src/leak.ts            same query, two roles, different answers
-src/side-channels.ts   the two leaks that survive correct policies
+src/side-channels.ts   the three leaks that survive correct policies
 src/check.ts           runs the guard against both connections
 src/test.ts            nine assertions against a live server
 ```
@@ -336,6 +356,12 @@ The `SECURITY DEFINER` trap and the constraint oracle were both raised by
 **Rahul S** in a discussion on dev.to. Neither was in the first version of
 this repo, and both survive a correct two-role split — which is exactly the
 kind of gap you do not find on your own.
+
+The composite tenant-aware foreign key — and the point that a green
+read-isolation suite proves surprisingly little — came from **Mads Hansen**,
+on the second post. Everything this repo had for the foreign-key direction
+was mitigation; his fix is structural, and it is the only thing here that
+closes an oracle rather than narrowing it.
 
 The reset-value explanation above came from a reader on dev.to who hit the
 same bug on a PostgREST stack, with `request.jwt.claim.sub` instead of
